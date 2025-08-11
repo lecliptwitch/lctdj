@@ -1,0 +1,79 @@
+# .github/workflows/twitch_daily_clips.yml
+name: Twitch Daily Top 10 Clips
+
+on:
+  schedule:
+    # Exécute tous les jours à 00h30 UTC (ajustez l'heure selon quand vous voulez le "best-of" du jour précédent)
+    - cron: '0 15 * * *'  # This cron job will run daily at 15:00 UTC (which is 17:00 CEST in Herve)
+  workflow_dispatch: # Permet de déclencher manuellement le workflow
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest # Utilise la dernière version d'Ubuntu
+
+    steps:
+    - name: ⬇️ Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python 3.x
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: ⚙️ Install dependencies (yt-dlp, ffmpeg, python)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg # Installation de FFmpeg
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt # Installe les dépendances Python
+
+    - name: 📁 Create data and output directories
+      run: |
+        mkdir -p data/raw_clips
+        mkdir -p output
+        # Les sous-dossiers comme data/processed_clips et data/clip_frames
+        # sont créés par download_clips.py, donc pas besoin ici.
+        echo "Data and output directories created."
+
+    - name: 📊 Get Top 10 Twitch Clips
+      env:
+        TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+        TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+      run: python scripts/get_top_clips.py
+
+    - name: 📥 Download Individual Clips and Extract Frames
+      run: python scripts/download_clips.py
+
+    - name: 🎬 Compile Video
+      run: python scripts/compile_video.py
+
+    # --- NOUVELLE ÉTAPE : Upload de la vidéo compilée en tant qu'artefact ---
+    - name: ⬆️ Upload Compiled Video as Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: compiled-twitch-video # Name of the artifact
+        path: output/compiled_video.mp4 # Path to the video to be archived
+        retention-days: 1 # How many days the artifact should be kept (adjust as needed)
+        if-no-files-found: ignore # Do not fail the step if the file is not found
+    # --- FIN DE LA NOUVELLE ÉTAPE ---
+
+    - name: 📝 Generate Video Metadata
+      run: python scripts/generate_metadata.py
+
+    - name: 🏞️ Generate Thumbnail # <--- NOUVELLE ÉTAPE AJOUTÉE ICI
+      run: python scripts/generate_thumbnail.py
+
+    - name: 📤 Upload to YouTube
+      env:
+        YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+        YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+        YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+      run: python scripts/upload_youtube.py
+      # continue-on-error: true # Consider adding this if you want subsequent steps to run even if YouTube upload fails (e.g., for cleanup)
+
+    - name: 🧹 Clean up temporary files
+      if: always() # Exécute même si les étapes précédentes échouent
+      run: |
+        rm -rf data/
+        rm -rf output/
+        echo "Temporary data and output directories cleaned."
